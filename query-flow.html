@@ -1,0 +1,732 @@
+<title>RAG 查询流程追踪</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+
+<style>
+  :root {
+    --bg: #fafafa;
+    --bg-elevated: #ffffff;
+    --bg-subtle: #f4f4f5;
+    --fg: #18181b;
+    --fg-muted: #71717a;
+    --fg-subtle: #a1a1aa;
+    --accent: #4f46e5;
+    --accent-soft: #eef2ff;
+    --accent-fg: #4338ca;
+    --border: #e4e4e7;
+    --border-strong: #d4d4d8;
+    --frontend: #0d9488;
+    --backend: #7c3aed;
+    --ai: #dc2626;
+    --vector: #d97706;
+    --code-bg: #18181b;
+    --code-fg: #e4e4e7;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0c0c10;
+      --bg-elevated: #17171c;
+      --bg-subtle: #1f1f26;
+      --fg: #f4f4f5;
+      --fg-muted: #a1a1aa;
+      --fg-subtle: #71717a;
+      --accent: #818cf8;
+      --accent-soft: #312e81;
+      --accent-fg: #a5b4fc;
+      --border: #27272a;
+      --border-strong: #3f3f46;
+      --frontend: #2dd4bf;
+      --backend: #a78bfa;
+      --ai: #f87171;
+      --vector: #fbbf24;
+      color-scheme: dark;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --bg: #0c0c10;
+    --bg-elevated: #17171c;
+    --bg-subtle: #1f1f26;
+    --fg: #f4f4f5;
+    --fg-muted: #a1a1aa;
+    --fg-subtle: #71717a;
+    --accent: #818cf8;
+    --accent-soft: #312e81;
+    --accent-fg: #a5b4fc;
+    --border: #27272a;
+    --border-strong: #3f3f46;
+    --frontend: #2dd4bf;
+    --backend: #a78bfa;
+    --ai: #f87171;
+    --vector: #fbbf24;
+    color-scheme: dark;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    font-size: 15px;
+    line-height: 1.6;
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+  }
+
+  .page {
+    max-width: 960px;
+    margin: 0 auto;
+    padding-block: 48px 80px;
+  }
+
+  h1 {
+    font-size: 2rem;
+    font-weight: 700;
+    margin: 0 0 8px;
+    letter-spacing: -0.02em;
+    text-wrap: balance;
+  }
+
+  .subtitle {
+    color: var(--fg-muted);
+    font-size: 1rem;
+    margin: 0 0 48px;
+  }
+
+  h2 {
+    font-size: 1.35rem;
+    font-weight: 600;
+    margin: 56px 0 20px;
+    letter-spacing: -0.01em;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  h2 .badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border-radius: 8px;
+    background: var(--accent-soft);
+    color: var(--accent-fg);
+    font-size: 0.8rem;
+    font-weight: 700;
+  }
+
+  h3 {
+    font-size: 1.05rem;
+    font-weight: 600;
+    margin: 0 0 10px;
+  }
+
+  p { margin: 0 0 14px; }
+
+  /* Architecture diagram */
+  .diagram-wrap {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 32px 24px;
+    overflow-x: auto;
+    margin-bottom: 8px;
+  }
+
+  figure {
+    margin: 0 0 24px;
+  }
+
+  figcaption {
+    color: var(--fg-muted);
+    font-size: 0.85rem;
+    text-align: center;
+    margin-top: 12px;
+  }
+
+  svg.diagram {
+    width: 100%;
+    max-width: 900px;
+    height: auto;
+    display: block;
+    margin: 0 auto;
+  }
+
+  /* Step cards */
+  .step-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .step {
+    display: grid;
+    grid-template-columns: 48px 1fr;
+    gap: 16px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px 18px;
+    transition: border-color 0.15s;
+  }
+
+  .step:hover {
+    border-color: var(--border-strong);
+  }
+
+  .step-num {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 0.85rem;
+    flex-shrink: 0;
+  }
+
+  .step-num.frontend { background: color-mix(in srgb, var(--frontend) 18%, transparent); color: var(--frontend); }
+  .step-num.backend { background: color-mix(in srgb, var(--backend) 18%, transparent); color: var(--backend); }
+  .step-num.ai { background: color-mix(in srgb, var(--ai) 18%, transparent); color: var(--ai); }
+  .step-num.vector { background: color-mix(in srgb, var(--vector) 18%, transparent); color: var(--vector); }
+
+  .step-content .step-title {
+    font-weight: 600;
+    margin-bottom: 4px;
+  }
+
+  .step-content .step-desc {
+    color: var(--fg-muted);
+    font-size: 0.92rem;
+  }
+
+  .step-content .step-file {
+    display: inline-block;
+    margin-top: 8px;
+    font-family: ui-monospace, "SF Mono", "Menlo", monospace;
+    font-size: 0.78rem;
+    color: var(--accent-fg);
+    background: var(--accent-soft);
+    padding: 2px 8px;
+    border-radius: 4px;
+  }
+
+  /* Layer legend */
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px;
+    justify-content: center;
+    margin-bottom: 32px;
+    font-size: 0.85rem;
+    color: var(--fg-muted);
+  }
+
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .legend-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+  }
+
+  /* Code blocks */
+  pre {
+    background: var(--code-bg);
+    color: var(--code-fg);
+    border-radius: 8px;
+    padding: 16px 18px;
+    overflow-x: auto;
+    font-size: 0.82rem;
+    line-height: 1.55;
+    margin: 12px 0;
+  }
+
+  code {
+    font-family: ui-monospace, "SF Mono", "Menlo", monospace;
+  }
+
+  p code, li code {
+    background: var(--bg-subtle);
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 0.88em;
+  }
+
+  /* Component grid */
+  .component-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    gap: 12px;
+    margin-top: 16px;
+  }
+
+  .component-card {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 16px;
+  }
+
+  .component-card .comp-name {
+    font-weight: 600;
+    font-size: 0.95rem;
+    margin-bottom: 4px;
+  }
+
+  .component-card .comp-role {
+    font-size: 0.78rem;
+    color: var(--fg-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-bottom: 8px;
+  }
+
+  .component-card .comp-desc {
+    font-size: 0.86rem;
+    color: var(--fg-muted);
+    line-height: 1.5;
+  }
+
+  .component-card .comp-layer {
+    display: inline-block;
+    font-size: 0.7rem;
+    font-weight: 600;
+    padding: 2px 7px;
+    border-radius: 4px;
+    margin-bottom: 8px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  .comp-layer.fe { background: color-mix(in srgb, var(--frontend) 15%, transparent); color: var(--frontend); }
+  .comp-layer.be { background: color-mix(in srgb, var(--backend) 15%, transparent); color: var(--backend); }
+  .comp-layer.ai-layer { background: color-mix(in srgb, var(--ai) 15%, transparent); color: var(--ai); }
+  .comp-layer.vec { background: color-mix(in srgb, var(--vector) 15%, transparent); color: var(--vector); }
+
+  /* Theme toggle */
+  .theme-toggle {
+    position: fixed;
+    top: max(16px, env(safe-area-inset-top, 0px));
+    right: max(16px, env(safe-area-inset-right, 0px));
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    color: var(--fg-muted);
+    border-radius: 8px;
+    padding: 6px 10px;
+    font-size: 0.8rem;
+    cursor: pointer;
+    z-index: 100;
+  }
+
+  .theme-toggle:hover {
+    color: var(--fg);
+    border-color: var(--border-strong);
+  }
+
+  @media (max-width: 600px) {
+    h1 { font-size: 1.5rem; }
+    .page { padding-block: 32px 60px; }
+    .diagram-wrap { padding: 16px 8px; }
+  }
+</style>
+
+<div class="page">
+
+  <button class="theme-toggle" onclick="toggleTheme()">切换主题</button>
+
+  <h1>RAG 查询流程追踪</h1>
+  <p class="subtitle">从用户输入到 AI 回答，一条消息在系统中的完整旅程</p>
+
+  <!-- Legend -->
+  <div class="legend">
+    <div class="legend-item">
+      <span class="legend-dot" style="background: var(--frontend)"></span>
+      前端层
+    </div>
+    <div class="legend-item">
+      <span class="legend-dot" style="background: var(--backend)"></span>
+      后端 API 层
+    </div>
+    <div class="legend-item">
+      <span class="legend-dot" style="background: var(--ai)"></span>
+      AI 生成层
+    </div>
+    <div class="legend-item">
+      <span class="legend-dot" style="background: var(--vector)"></span>
+      向量检索层
+    </div>
+  </div>
+
+  <!-- Architecture diagram -->
+  <h2><span class="badge">📐</span> 整体架构图</h2>
+
+  <figure>
+    <div class="diagram-wrap">
+      <svg class="diagram" viewBox="0 0 900 520" role="img" aria-label="RAG 系统架构图：用户查询从前端出发，经过后端 API、RAG 编排、AI 生成（含工具调用）、向量检索，最终返回回答">
+        <defs>
+          <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor"/>
+          </marker>
+          <marker id="arrow-dashed" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor" opacity="0.5"/>
+          </marker>
+        </defs>
+
+        <!-- Layer backgrounds -->
+        <rect x="0" y="0" width="900" height="520" fill="none"/>
+
+        <!-- Frontend layer label -->
+        <text x="30" y="50" fill="var(--frontend)" font-size="12" font-weight="600" font-family="sans-serif" style="text-transform:uppercase;letter-spacing:0.08em">前端层</text>
+
+        <!-- Frontend: Browser box -->
+        <rect x="30" y="70" width="200" height="120" rx="10"
+              fill="color-mix(in srgb, var(--frontend) 10%, transparent)"
+              stroke="var(--frontend)" stroke-width="1.5"/>
+        <text x="130" y="98" text-anchor="middle" fill="var(--fg)" font-size="14" font-weight="600" font-family="sans-serif">浏览器 (index.html)</text>
+        <text x="130" y="118" text-anchor="middle" fill="var(--fg-muted)" font-size="11" font-family="sans-serif">chatInput / sendButton</text>
+        <text x="130" y="138" text-anchor="middle" fill="var(--fg-muted)" font-size="11" font-family="sans-serif">chatMessages 渲染区</text>
+        <text x="130" y="158" text-anchor="middle" fill="var(--fg-muted)" font-size="11" font-family="sans-serif">marked.js Markdown 渲染</text>
+
+        <!-- Frontend: script.js box -->
+        <rect x="30" y="210" width="200" height="80" rx="10"
+              fill="color-mix(in srgb, var(--frontend) 10%, transparent)"
+              stroke="var(--frontend)" stroke-width="1.5"/>
+        <text x="130" y="238" text-anchor="middle" fill="var(--fg)" font-size="14" font-weight="600" font-family="sans-serif">script.js</text>
+        <text x="130" y="258" text-anchor="middle" fill="var(--fg-muted)" font-size="11" font-family="sans-serif">sendMessage() 函数</text>
+        <text x="130" y="276" text-anchor="middle" fill="var(--fg-muted)" font-size="11" font-family="sans-serif">fetch → POST /api/query</text>
+
+        <!-- Frontend internal arrow -->
+        <line x1="130" y1="190" x2="130" y2="210" stroke="var(--frontend)" stroke-width="1.5"
+              marker-end="url(#arrow)"/>
+
+        <!-- Backend layer label -->
+        <text x="280" y="50" fill="var(--backend)" font-size="12" font-weight="600" font-family="sans-serif" style="text-transform:uppercase;letter-spacing:0.08em">后端 API 层</text>
+
+        <!-- Backend: FastAPI app -->
+        <rect x="280" y="70" width="190" height="100" rx="10"
+              fill="color-mix(in srgb, var(--backend) 10%, transparent)"
+              stroke="var(--backend)" stroke-width="1.5"/>
+        <text x="375" y="98" text-anchor="middle" fill="var(--fg)" font-size="14" font-weight="600" font-family="sans-serif">FastAPI app.py</text>
+        <text x="375" y="118" text-anchor="middle" fill="var(--fg-muted)" font-size="11" font-family="sans-serif">POST /api/query</text>
+        <text x="375" y="136" text-anchor="middle" fill="var(--fg-muted)" font-size="11" font-family="sans-serif">QueryRequest → QueryResponse</text>
+        <text x="375" y="154" text-anchor="middle" fill="var(--fg-muted)" font-size="11" font-family="sans-serif">Session 创建与管理</text>
+
+        <!-- Frontend → Backend arrow (HTTP request) -->
+        <line x1="230" y1="250" x2="280" y2="250" stroke="var(--fg)" stroke-width="1.5"
+              marker-end="url(#arrow)"/>
+        <text x="255" y="240" text-anchor="middle" fill="var(--fg-muted)" font-size="10" font-family="sans-serif">HTTP POST</text>
+
+        <!-- Backend: RAGSystem -->
+        <rect x="280" y="200" width="190" height="90" rx="10"
+              fill="color-mix(in srgb, var(--backend) 10%, transparent)"
+              stroke="var(--backend)" stroke-width="1.5"/>
+        <text x="375" y="228" text-anchor="middle" fill="var(--fg)" font-size="14" font-weight="600" font-family="sans-serif">RAGSystem</text>
+        <text x="375" y="248" text-anchor="middle" fill="var(--fg-muted)" font-size="11" font-family="sans-serif">query() 编排方法</text>
+        <text x="375" y="266" text-anchor="middle" fill="var(--fg-muted)" font-size="11" font-family="sans-serif">会话历史 + 工具注册</text>
+        <text x="375" y="284" text-anchor="middle" fill="var(--fg-muted)" font-size="11" font-family="sans-serif">来源收集</text>
+
+        <!-- FastAPI → RAGSystem arrow -->
+        <line x1="375" y1="170" x2="375" y2="200" stroke="var(--backend)" stroke-width="1.5"
+              marker-end="url(#arrow)"/>
+
+        <!-- AI layer label -->
+        <text x="520" y="50" fill="var(--ai)" font-size="12" font-weight="600" font-family="sans-serif" style="text-transform:uppercase;letter-spacing:0.08em">AI 生成层</text>
+
+        <!-- AI: AIGenerator -->
+        <rect x="520" y="70" width="200" height="120" rx="10"
+              fill="color-mix(in srgb, var(--ai) 10%, transparent)"
+              stroke="var(--ai)" stroke-width="1.5"/>
+        <text x="620" y="98" text-anchor="middle" fill="var(--fg)" font-size="14" font-weight="600" font-family="sans-serif">AIGenerator</text>
+        <text x="620" y="118" text-anchor="middle" fill="var(--fg-muted)" font-size="11" font-family="sans-serif">generate_response()</text>
+        <text x="620" y="136" text-anchor="middle" fill="var(--fg-muted)" font-size="11" font-family="sans-serif">Anthropic Claude API</text>
+        <text x="620" y="154" text-anchor="middle" fill="var(--fg-muted)" font-size="11" font-family="sans-serif">工具调用（tool_use）</text>
+        <text x="620" y="172" text-anchor="middle" fill="var(--fg-muted)" font-size="11" font-family="sans-serif">系统提示词 + 对话历史</text>
+
+        <!-- RAGSystem → AIGenerator arrow -->
+        <line x1="470" y1="245" x2="520" y2="180" stroke="var(--fg)" stroke-width="1.5"
+              marker-end="url(#arrow)"/>
+        <text x="490" y="202" text-anchor="middle" fill="var(--fg-muted)" font-size="10" font-family="sans-serif">prompt + tools</text>
+
+        <!-- AI: ToolManager -->
+        <rect x="520" y="220" width="200" height="80" rx="10"
+              fill="color-mix(in srgb, var(--ai) 10%, transparent)"
+              stroke="var(--ai)" stroke-width="1.5"/>
+        <text x="620" y="248" text-anchor="middle" fill="var(--fg)" font-size="14" font-weight="600" font-family="sans-serif">ToolManager</text>
+        <text x="620" y="268" text-anchor="middle" fill="var(--fg-muted)" font-size="11" font-family="sans-serif">execute_tool()</text>
+        <text x="620" y="286" text-anchor="middle" fill="var(--fg-muted)" font-size="11" font-family="sans-serif">CourseSearchTool</text>
+
+        <!-- AIGenerator → ToolManager arrow (tool_use) -->
+        <line x1="620" y1="190" x2="620" y2="220" stroke="var(--ai)" stroke-width="1.5" stroke-dasharray="5,3"
+              marker-end="url(#arrow-dashed)"/>
+        <text x="660" y="208" text-anchor="start" fill="var(--fg-muted)" font-size="10" font-family="sans-serif">tool_use</text>
+
+        <!-- RAGSystem → ToolManager arrow (tool registration) -->
+        <line x1="470" y1="270" x2="520" y2="270" stroke="var(--fg-muted)" stroke-width="1" stroke-dasharray="4,3"
+              marker-end="url(#arrow-dashed)"/>
+        <text x="490" y="262" text-anchor="middle" fill="var(--fg-muted)" font-size="10" font-family="sans-serif">注册工具</text>
+
+        <!-- Vector layer label -->
+        <text x="770" y="50" fill="var(--vector)" font-size="12" font-weight="600" font-family="sans-serif" style="text-transform:uppercase;letter-spacing:0.08em">检索层</text>
+
+        <!-- Vector: VectorStore -->
+        <rect x="770" y="110" width="110" height="140" rx="10"
+              fill="color-mix(in srgb, var(--vector) 10%, transparent)"
+              stroke="var(--vector)" stroke-width="1.5"/>
+        <text x="825" y="138" text-anchor="middle" fill="var(--fg)" font-size="13" font-weight="600" font-family="sans-serif">VectorStore</text>
+        <text x="825" y="158" text-anchor="middle" fill="var(--fg-muted)" font-size="10.5" font-family="sans-serif">ChromaDB</text>
+        <text x="825" y="176" text-anchor="middle" fill="var(--fg-muted)" font-size="10.5" font-family="sans-serif">course_catalog</text>
+        <text x="825" y="194" text-anchor="middle" fill="var(--fg-muted)" font-size="10.5" font-family="sans-serif">course_content</text>
+        <text x="825" y="212" text-anchor="middle" fill="var(--fg-muted)" font-size="10.5" font-family="sans-serif">语义搜索 + 过滤</text>
+        <text x="825" y="230" text-anchor="middle" fill="var(--fg-muted)" font-size="10.5" font-family="sans-serif">all-MiniLM-L6-v2</text>
+
+        <!-- ToolManager → VectorStore arrow -->
+        <line x1="720" y1="260" x2="770" y2="200" stroke="var(--vector)" stroke-width="1.5"
+              marker-end="url(#arrow)"/>
+        <text x="750" y="220" text-anchor="middle" fill="var(--fg-muted)" font-size="10" font-family="sans-serif">search()</text>
+
+        <!-- Return path: VectorStore → ToolManager -->
+        <line x1="770" y1="215" x2="720" y2="275" stroke="var(--fg-muted)" stroke-width="1.2" stroke-dasharray="4,3"
+              marker-end="url(#arrow-dashed)"/>
+        <text x="728" y="296" text-anchor="start" fill="var(--fg-muted)" font-size="10" font-family="sans-serif">chunks + metadata</text>
+
+        <!-- Return path: ToolManager → AIGenerator (tool_result) -->
+        <line x1="620" y1="300" x2="620" y2="200" stroke="var(--ai)" stroke-width="1.2" stroke-dasharray="4,3"
+              marker-end="url(#arrow-dashed)"/>
+        <text x="628" y="258" text-anchor="start" fill="var(--fg-muted)" font-size="10" font-family="sans-serif">tool_result</text>
+
+        <!-- Session manager -->
+        <rect x="280" y="320" width="190" height="65" rx="10"
+              fill="color-mix(in srgb, var(--backend) 8%, transparent)"
+              stroke="var(--backend)" stroke-width="1" stroke-dasharray="4,3"/>
+        <text x="375" y="345" text-anchor="middle" fill="var(--fg)" font-size="13" font-weight="600" font-family="sans-serif">SessionManager</text>
+        <text x="375" y="365" text-anchor="middle" fill="var(--fg-muted)" font-size="10.5" font-family="sans-serif">内存会话存储 / 对话历史</text>
+
+        <line x1="375" y1="290" x2="375" y2="320" stroke="var(--fg-muted)" stroke-width="1" stroke-dasharray="3,2"/>
+
+        <!-- Final response path -->
+        <path d="M 720 160 C 760 100, 500 60, 230 180"
+              fill="none" stroke="var(--accent)" stroke-width="2"
+              marker-end="url(#arrow)"/>
+        <text x="480" y="72" text-anchor="middle" fill="var(--accent)" font-size="11" font-weight="600" font-family="sans-serif">最终回答 + 来源 → 前端渲染</text>
+
+      </svg>
+    </div>
+    <figcaption>图 1：用户查询在 RAG 系统中的完整流转路径。实线为请求方向，虚线为返回/辅助方向。</figcaption>
+  </figure>
+
+  <!-- Step-by-step flow -->
+  <h2><span class="badge">🔄</span> 分步详解</h2>
+
+  <div class="step-list">
+
+    <div class="step">
+      <div class="step-num frontend">1</div>
+      <div class="step-content">
+        <div class="step-title">用户输入消息</div>
+        <div class="step-desc">用户在输入框中键入问题，点击发送按钮或按 Enter 键触发 <code>sendMessage()</code> 函数。函数先在 UI 中添加用户消息气泡，显示加载动画，然后禁用输入防止重复提交。</div>
+        <span class="step-file">frontend/script.js:45</span>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="step-num frontend">2</div>
+      <div class="step-content">
+        <div class="step-title">发送 HTTP 请求</div>
+        <div class="step-desc">前端通过 <code>fetch()</code> 向 <code>POST /api/query</code> 发送 JSON 请求，包含 <code>query</code>（用户问题）和 <code>session_id</code>（首次为 null）。请求路径使用相对路径 <code>/api</code>，与前端同源。</div>
+        <span class="step-file">frontend/script.js:63</span>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="step-num backend">3</div>
+      <div class="step-content">
+        <div class="step-title">FastAPI 接收请求</div>
+        <div class="step-desc">FastAPI 路由 <code>query_documents()</code> 接收 <code>QueryRequest</code>。如果没有 <code>session_id</code>，调用 <code>session_manager.create_session()</code> 创建新会话（生成 <code>session_N</code> 格式的 ID）。</div>
+        <span class="step-file">backend/app.py:56</span>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="step-num backend">4</div>
+      <div class="step-content">
+        <div class="step-title">RAGSystem 编排查询</div>
+        <div class="step-desc"><code>rag_system.query()</code> 是核心编排器：构建 prompt、从 <code>SessionManager</code> 获取对话历史、调用 <code>AIGenerator.generate_response()</code> 并传入工具定义，最后收集来源并更新会话历史。</div>
+        <span class="step-file">backend/rag_system.py:102</span>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="step-num ai">5</div>
+      <div class="step-content">
+        <div class="step-title">Claude API 首次调用（决策是否检索）</div>
+        <div class="step-desc">AIGenerator 将系统提示词、对话历史、用户问题和工具定义一起发给 Claude。Claude 根据问题类型决定：是直接回答（常识类），还是调用 <code>search_course_content</code> 工具搜索课程内容（课程相关问题）。</div>
+        <span class="step-file">backend/ai_generator.py:43</span>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="step-num ai">6</div>
+      <div class="step-content">
+        <div class="step-title">工具调用执行</div>
+        <div class="step-desc">如果 Claude 返回 <code>stop_reason: "tool_use"</code>，<code>_handle_tool_execution()</code> 通过 <code>ToolManager.execute_tool()</code> 调用对应的工具（目前只有 <code>CourseSearchTool</code>）。工具名称和参数由 Claude 自主决定。</div>
+        <span class="step-file">backend/ai_generator.py:89</span>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="step-num vector">7</div>
+      <div class="step-content">
+        <div class="step-title">向量语义搜索</div>
+        <div class="step-desc"><code>CourseSearchTool.execute()</code> 调用 <code>VectorStore.search()</code>。如果提供了课程名，先在 <code>course_catalog</code> 集合中做语义匹配找到准确课程；然后在 <code>course_content</code> 集合中进行向量相似度检索，支持按课程和课时过滤，返回 top-K 结果。</div>
+        <span class="step-file">backend/vector_store.py:61</span>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="step-num vector">8</div>
+      <div class="step-content">
+        <div class="step-title">搜索结果格式化</div>
+        <div class="step-desc"><code>CourseSearchTool._format_results()</code> 将检索到的文本块和元数据格式化为带课程/课时标注的字符串，同时记录 <code>last_sources</code>（来源列表）供 UI 展示。</div>
+        <span class="step-file">backend/search_tools.py:88</span>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="step-num ai">9</div>
+      <div class="step-content">
+        <div class="step-title">Claude 二次调用（生成最终回答）</div>
+        <div class="step-desc">工具结果以 <code>tool_result</code> 消息形式追加到对话中，再次调用 Claude API。这次 Claude 基于检索到的课程内容生成最终回答，不再启用工具调用。</div>
+        <span class="step-file">backend/ai_generator.py:127</span>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="step-num backend">10</div>
+      <div class="step-content">
+        <div class="step-title">返回响应并更新会话</div>
+        <div class="step-desc">RAGSystem 从 ToolManager 获取来源列表，将问答对添加到 SessionManager 的历史记录中（受 <code>MAX_HISTORY</code> 限制），最终返回 <code>(answer, sources)</code>。FastAPI 封装为 <code>QueryResponse</code> 返回前端。</div>
+        <span class="step-file">backend/rag_system.py:136</span>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="step-num frontend">11</div>
+      <div class="step-content">
+        <div class="step-title">前端渲染回答</div>
+        <div class="step-desc">前端收到响应后移除加载动画，使用 <code>marked.parse()</code> 将 Markdown 格式的回答渲染为 HTML，显示在消息气泡中。如果有来源，附加可折叠的 Sources 区域。最后重新启用输入框。</div>
+        <span class="step-file">frontend/script.js:84</span>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Key components -->
+  <h2><span class="badge">🧩</span> 核心组件一览</h2>
+
+  <div class="component-grid">
+    <div class="component-card">
+      <span class="comp-layer fe">前端</span>
+      <div class="comp-name">script.js</div>
+      <div class="comp-desc">纯原生 JS 客户端，管理聊天 UI 和 API 调用，使用 marked.js 渲染 Markdown。</div>
+    </div>
+
+    <div class="component-card">
+      <span class="comp-layer be">后端</span>
+      <div class="comp-name">app.py</div>
+      <div class="comp-desc">FastAPI 应用，定义 API 路由、CORS 中间件、静态文件服务和启动事件。</div>
+    </div>
+
+    <div class="component-card">
+      <span class="comp-layer be">后端</span>
+      <div class="comp-name">RAGSystem</div>
+      <div class="comp-desc">RAG 编排器，串联文档处理、向量存储、AI 生成、会话管理和工具系统。</div>
+    </div>
+
+    <div class="component-card">
+      <span class="comp-layer ai-layer">AI</span>
+      <div class="comp-name">AIGenerator</div>
+      <div class="comp-desc">Claude API 封装，处理工具调用循环，系统提示词约束回答风格。</div>
+    </div>
+
+    <div class="component-card">
+      <span class="comp-layer ai-layer">AI</span>
+      <div class="comp-name">ToolManager / CourseSearchTool</div>
+      <div class="comp-desc">工具注册与分发。搜索工具将用户查询转化为向量检索并格式化结果。</div>
+    </div>
+
+    <div class="component-card">
+      <span class="comp-layer vec">检索</span>
+      <div class="comp-name">VectorStore</div>
+      <div class="comp-desc">ChromaDB 封装，两个集合（catalog + content），使用 all-MiniLM-L6-v2 本地嵌入模型。</div>
+    </div>
+
+    <div class="component-card">
+      <span class="comp-layer be">后端</span>
+      <div class="comp-name">SessionManager</div>
+      <div class="comp-desc">内存会话存储，维护每个会话的对话历史，用于上下文关联。</div>
+    </div>
+
+    <div class="component-card">
+      <span class="comp-layer vec">检索</span>
+      <div class="comp-name">DocumentProcessor</div>
+      <div class="comp-desc">课程文档解析器，按课时拆分内容，句子级分块（带重叠），生成 CourseChunk。</div>
+    </div>
+  </div>
+
+  <!-- Key design notes -->
+  <h2><span class="badge">💡</span> 设计要点</h2>
+
+  <h3>工具调用式 RAG（非前置检索）</h3>
+  <p>与传统的"先检索再生成"模式不同，这个系统采用 <strong>LLM 自主决策是否检索</strong>的工具调用模式。Claude 根据问题类型决定：</p>
+  <ul>
+    <li><strong>课程相关问题</strong> → 调用搜索工具 → 基于检索结果回答</li>
+    <li><strong>通用知识问题</strong> → 直接回答，不浪费检索开销</li>
+  </ul>
+  <p>系统提示词明确限制"每次查询最多一次搜索"，避免多轮工具调用导致延迟过高。</p>
+
+  <h3>双集合向量存储</h3>
+  <p>ChromaDB 中有两个独立集合：</p>
+  <ul>
+    <li><code>course_catalog</code> — 存储课程标题和元数据，用于模糊匹配课程名（用户说"MCP 课"能找到全名）</li>
+    <li><code>course_content</code> — 存储分块的课程内容，用于语义搜索</li>
+  </ul>
+
+  <h3>本地嵌入模型</h3>
+  <p>使用 <code>sentence-transformers/all-MiniLM-L6-v2</code> 在本地生成嵌入向量，不依赖外部 API，降低成本且保护数据隐私。</p>
+
+</div>
+
+<script>
+  function toggleTheme() {
+    const root = document.documentElement;
+    const current = root.getAttribute('data-theme');
+    if (current === 'dark') {
+      root.setAttribute('data-theme', 'light');
+      localStorage.setItem('theme', 'light');
+    } else if (current === 'light') {
+      root.setAttribute('data-theme', 'dark');
+      localStorage.setItem('theme', 'dark');
+    } else {
+      const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+      root.setAttribute('data-theme', prefersDark ? 'light' : 'dark');
+      localStorage.setItem('theme', prefersDark ? 'light' : 'dark');
+    }
+  }
+
+  // Apply saved theme on load
+  try {
+    const saved = localStorage.getItem('theme');
+    if (saved) {
+      document.documentElement.setAttribute('data-theme', saved);
+    }
+  } catch (e) {}
+</script>
