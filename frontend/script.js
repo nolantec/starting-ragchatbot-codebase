@@ -5,7 +5,7 @@ const API_URL = '/api';
 let currentSessionId = null;
 
 // DOM elements
-let chatMessages, chatInput, sendButton, totalCourses, courseTitles;
+let chatMessages, chatInput, sendButton, totalCourses, courseTitles, newChatButton;
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
@@ -15,6 +15,7 @@ document.addEventListener('DOMContentLoaded', () => {
     sendButton = document.getElementById('sendButton');
     totalCourses = document.getElementById('totalCourses');
     courseTitles = document.getElementById('courseTitles');
+    newChatButton = document.getElementById('newChatButton');
     
     setupEventListeners();
     createNewSession();
@@ -37,6 +38,12 @@ function setupEventListeners() {
             chatInput.value = question;
             sendMessage();
         });
+    });
+
+    // New chat button
+    newChatButton.addEventListener('click', () => {
+        createNewSession();
+        chatInput.focus();
     });
 }
 
@@ -122,10 +129,22 @@ function addMessage(content, type, sources = null, isWelcome = false) {
     let html = `<div class="message-content">${displayContent}</div>`;
     
     if (sources && sources.length > 0) {
+        const sourcesItems = sources.map(s => {
+            // 兼容旧格式：如果 source 是字符串，转为对象
+            const sourceText = typeof s === 'string' ? s : (s.text || '');
+            const sourceUrl = typeof s === 'string' ? null : (s.url || null);
+
+            if (sourceUrl) {
+                return `<li class="source-item"><a href="${escapeHtml(sourceUrl)}" target="_blank" rel="noopener noreferrer" class="source-link"><span class="source-icon">↗</span><span class="source-title">${escapeHtml(sourceText)}</span></a></li>`;
+            } else {
+                return `<li class="source-item"><span class="source-title">${escapeHtml(sourceText)}</span></li>`;
+            }
+        }).join('');
+
         html += `
             <details class="sources-collapsible">
                 <summary class="sources-header">Sources</summary>
-                <div class="sources-content">${sources.join(', ')}</div>
+                <ul class="sources-list">${sourcesItems}</ul>
             </details>
         `;
     }
